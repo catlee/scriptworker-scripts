@@ -878,7 +878,7 @@ async def extract_archive(context, archive, tmp_dir=None):
     if archive.endswith(".zip"):
         await _extract_zipfile(context, archive, tmp_dir=tmp_dir)
         return tmp_dir
-    elif archive.endswith([".tar.bz2", ".tar.gz"]):
+    elif archive.endswith((".tar.bz2", ".tar.gz")):
         ext = os.path.splitext(archive)[1]
         await _extract_tarfile(context, archive, ext, tmp_dir=tmp_dir)
         return tmp_dir
