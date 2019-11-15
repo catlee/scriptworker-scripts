@@ -361,6 +361,8 @@ async def sign_omnija(context, orig_path, fmt):
         str: the path to the signed archive
 
     """
+    if not os.path.isdir(orig_path):
+        raise SigningScriptError("Don't know how to sign {} with omnija".format(orig_path))
     # Get file list
     all_files = _get_files(orig_path)
     files_to_sign = _get_omnija_signing_files(all_files)

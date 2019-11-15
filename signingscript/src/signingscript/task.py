@@ -135,6 +135,17 @@ def _check_scopes_exist_and_all_have_the_same_prefix(scopes, prefixes):
         )
 
 
+async def make_archive(context, dirname, archive_ext, output):
+    files = ssign._get_files(dirname)
+    if archive_ext == ".zip":
+        output = await ssign._create_zipfile(context, output, files, dirname)
+    elif archive_ext in (".tar.bz2", ".tar.gz"):
+        output = await ssign._create_tarfile(context, output, files, archive_ext, dirname)
+    else:
+        raise ValueError("Unsupported archive format {}".format(archive_ext))
+    return output
+
+
 # sign {{{1
 async def sign(context, path, signing_formats):
     """Call the appropriate signing function per format, for a single file.
@@ -157,6 +168,7 @@ async def sign(context, path, signing_formats):
 
     output = path
     output_archive = False
+    ext = os.path.splitext(path)[1]
     # Loop through the formats and sign one by one.
     for fmt in signing_formats:
         signing_func = _get_signing_function_from_format(fmt)
@@ -165,18 +177,16 @@ async def sign(context, path, signing_formats):
             if not os.path.isdir(output):
                 output = await extract_archive(context, output)
             output_archive = True
+        else:
+            if os.path.isdir(output):
+                output = await make_archive(context, output, ext, path)
+            output_archive = False
+
         output = await signing_func(context, output, fmt)
 
     # Re-create an archive if necessary
     if output_archive:
-        ext = os.path.splitext(path)[1]
-        files = ssign._get_files(output)
-        if ext == ".zip":
-            output = await ssign._create_zipfile(context, path, files, output)
-        elif ext in (".tar.bz2", ".tar.gz"):
-            output = await ssign._create_tarfile(context, path, files, ext, output)
-        else:
-            raise ValueError("Need to add support for re-creating archives")
+        output = await make_archive(context, output, ext, path)
 
     # We want to return a list
     if not isinstance(output, (tuple, list)):
