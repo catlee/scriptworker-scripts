@@ -29,7 +29,6 @@ from mardor.writer import add_signature_block
 
 from scriptworker.utils import (
     get_single_item_from_sequence,
-    makedirs,
     raise_future_exceptions,
     retry_async,
     rm,
@@ -316,7 +315,9 @@ async def sign_widevine(context, orig_path, fmt):
 
     """
     if not os.path.isdir(orig_path):
-        raise SigningScriptError("Don't know how to sign {} with widevine".format(orig_path))
+        raise SigningScriptError(
+            "Don't know how to sign {} with widevine".format(orig_path)
+        )
     # Get file list
     all_files = _get_files(orig_path)
     files_to_sign = _get_widevine_signing_files(all_files)
@@ -330,9 +331,7 @@ async def sign_widevine(context, orig_path, fmt):
         to = f"{from_}.sig"
         tasks.append(
             asyncio.ensure_future(
-                sign_widevine_with_autograph(
-                    context, from_, "blessed" in fmt, to=to
-                )
+                sign_widevine_with_autograph(context, from_, "blessed" in fmt, to=to)
             )
         )
         all_files.append(to)
@@ -362,7 +361,9 @@ async def sign_omnija(context, orig_path, fmt):
 
     """
     if not os.path.isdir(orig_path):
-        raise SigningScriptError("Don't know how to sign {} with omnija".format(orig_path))
+        raise SigningScriptError(
+            "Don't know how to sign {} with omnija".format(orig_path)
+        )
     # Get file list
     all_files = _get_files(orig_path)
     files_to_sign = _get_omnija_signing_files(all_files)
@@ -596,6 +597,7 @@ async def _convert_dmg_to_tar_gz(context, from_):
 
 # extract_archive {{{1
 async def extract_archive(context, archive, tmp_dir=None):
+    """Extract an archive."""
     work_dir = context.config["work_dir"]
     tmp_dir = tmp_dir or os.path.join(work_dir, "unpacked")
     if archive.endswith(".zip"):

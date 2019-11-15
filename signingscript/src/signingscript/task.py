@@ -136,11 +136,15 @@ def _check_scopes_exist_and_all_have_the_same_prefix(scopes, prefixes):
 
 
 async def make_archive(context, dirname, archive_ext, output):
+    """Create an archive."""
     files = ssign._get_files(dirname)
     if archive_ext == ".zip":
         output = await ssign._create_zipfile(context, output, files, dirname)
     elif archive_ext in (".tar.bz2", ".tar.gz"):
-        output = await ssign._create_tarfile(context, output, files, archive_ext, dirname)
+        compression = archive_ext.split(".")[-1]
+        output = await ssign._create_tarfile(
+            context, output, files, compression, dirname
+        )
     else:
         raise ValueError("Unsupported archive format {}".format(archive_ext))
     return output
@@ -161,32 +165,38 @@ async def sign(context, path, signing_formats):
 
     """
     archive_formats = {
-        'autograph_widevine',
-        'autograph_omnija',
-        'autograph_authenticode',
+        "autograph_widevine",
+        "autograph_omnija",
+        "autograph_authenticode",
     }
 
     output = path
-    output_archive = False
-    ext = os.path.splitext(path)[1]
+    recreate_archive = False
+    if path.endswith(".zip"):
+        archive_ext = ".zip"
+    elif path.endswith(".tar.gz"):
+        archive_ext = ".tar.gz"
+    elif path.endswith(".tar.bz2"):
+        archive_ext = ".tar.bz2"
+    else:
+        archive_ext = None
     # Loop through the formats and sign one by one.
     for fmt in signing_formats:
         signing_func = _get_signing_function_from_format(fmt)
-        output_is_dir = os.path.isdir(output)
         if fmt in archive_formats:
             if not os.path.isdir(output):
                 output = await extract_archive(context, output)
-            output_archive = True
+            recreate_archive = True
         else:
             if os.path.isdir(output):
-                output = await make_archive(context, output, ext, path)
-            output_archive = False
+                output = await make_archive(context, output, archive_ext, path)
+            recreate_archive = False
 
         output = await signing_func(context, output, fmt)
 
     # Re-create an archive if necessary
-    if output_archive:
-        output = await make_archive(context, output, ext, path)
+    if recreate_archive:
+        output = await make_archive(context, output, archive_ext, path)
 
     # We want to return a list
     if not isinstance(output, (tuple, list)):
