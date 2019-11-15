@@ -313,6 +313,9 @@ async def sign_widevine(context, orig_path, fmt):
         str: the path to the signed archive
 
     """
+    if os.path.isdir(orig_path):
+        return await sign_widevine_dir(context, orig_path, fmt)
+
     file_base, file_extension = os.path.splitext(orig_path)
     # Convert dmg to tarball
     if file_extension == ".dmg":
@@ -327,6 +330,52 @@ async def sign_widevine(context, orig_path, fmt):
         if orig_path.endswith(ext):
             return await signing_func(context, orig_path, fmt)
     raise SigningScriptError("Unknown widevine file format for {}".format(orig_path))
+
+
+# sign_widevine_dir {{{1
+@time_async_function
+async def sign_widevine_dir(context, orig_path, fmt):
+    """Sign the a directory with widevine.
+
+    Extract the files to sign (see `_WIDEVINE_BLESSED_FILENAMES` and
+    `_WIDEVINE_UNBLESSED_FILENAMES), skipping already-signed files.
+    The blessed files should be signed with the `widevine_blessed` format.
+    Then append the sigfiles to the zipfile.
+
+    Args:
+        context (Context): the signing context
+        orig_path (str): the source file to sign
+        fmt (str): the format to sign with
+
+    Returns:
+        str: the path to the signed archive
+
+    """
+    # Get file list
+    all_files = _get_files(orig_path)
+    files_to_sign = _get_widevine_signing_files(all_files)
+    log.debug("Widevine files to sign: %s", files_to_sign)
+    if not files_to_sign:
+        return orig_path
+
+    tasks = []
+    # Sign the appropriate inner files
+    for from_, fmt in files_to_sign.items():
+        to = f"{from_}.sig"
+        tasks.append(
+            asyncio.ensure_future(
+                sign_widevine_with_autograph(
+                    context, from_, "blessed" in fmt, to=to
+                )
+            )
+        )
+        all_files.append(to)
+    await raise_future_exceptions(tasks)
+    remove_extra_files(orig_path, all_files)
+    # Regenerate the `precomplete` file, which is used for cleanup before
+    # applying a complete mar.
+    _run_generate_precomplete(context, orig_path)
+    return orig_path
 
 
 # sign_widevine_zip {{{1
@@ -466,6 +515,9 @@ async def sign_omnija(context, orig_path, fmt):
         str: the path to the signed archive
 
     """
+    if os.path.isdir(orig_path):
+        return await sign_omnija_dir(context, orig_path, fmt)
+
     file_base, file_extension = os.path.splitext(orig_path)
     # Convert dmg to tarball
     if file_extension == ".dmg":
@@ -480,6 +532,38 @@ async def sign_omnija(context, orig_path, fmt):
         if orig_path.endswith(ext):
             return await signing_func(context, orig_path, fmt)
     raise SigningScriptError("Unknown omnija file format for {}".format(orig_path))
+
+
+# sign_omnija_dir {{{1
+async def sign_omnija_dir(context, orig_path, fmt):
+    """Sign the a directory with the omnija key for all omni.ja files.
+
+    Sign files with autograph, recreating the omni.ja
+    from the original to preserve performance tweeks but adding signing info,
+    Then append the sigfiles to the zipfile.
+
+    Args:
+        context (Context): the signing context
+        orig_path (str): the source file to sign
+        fmt (str): the format to sign with
+
+    Returns:
+        str: the path to the signed archive
+
+    """
+    # Get file list
+    all_files = _get_files(orig_path)
+    files_to_sign = _get_omnija_signing_files(all_files)
+    log.debug("Omnija files to sign: %s", files_to_sign)
+    if files_to_sign:
+        tasks = []
+        # Sign the appropriate inner files
+        for from_, fmt in files_to_sign.items():
+            tasks.append(
+                asyncio.ensure_future(sign_omnija_with_autograph(context, from_))
+            )
+        await raise_future_exceptions(tasks)
+    return orig_path
 
 
 # sign_omnija_zip {{{1
@@ -785,6 +869,28 @@ async def _convert_dmg_to_tar_gz(context, from_):
         await utils.execute_subprocess(tar_cmd, cwd=app_dir)
 
     return to
+
+
+# extract_archive {{{1
+async def extract_archive(context, archive, tmp_dir=None):
+    work_dir = context.config["work_dir"]
+    tmp_dir = tmp_dir or os.path.join(work_dir, "unpacked")
+    if archive.endswith(".zip"):
+        await _extract_zipfile(context, archive, tmp_dir=tmp_dir)
+        return tmp_dir
+    elif archive.endswith([".tar.bz2", ".tar.gz"]):
+        ext = os.path.splitext(archive)[1]
+        await _extract_tarfile(context, archive, ext, tmp_dir=tmp_dir)
+        return tmp_dir
+    else:
+        raise IOError("Don't know how to unpack {}".format(archive))
+
+
+def _get_files(dirname):
+    retval = []
+    for root, dirs, files in os.walk(dirname):
+        retval.extend(os.path.join(root, f) for f in files)
+    return retval
 
 
 # _get_zipfile_files {{{1
@@ -1481,8 +1587,11 @@ async def sign_authenticode_zip(context, orig_path, fmt):
     # rather than immediately after `sign_signcode`, to optimize task runtime
     # speed over disk space.
     tmp_dir = None
-    # Extract the zipfile
-    if file_extension == ".zip":
+    if os.path.isdir(orig_path):
+        files = _get_files(orig_path)
+        file_extension = None
+    elif file_extension == ".zip":
+        # Extract the zipfile
         tmp_dir = tempfile.mkdtemp(prefix="zip", dir=context.config["work_dir"])
         files = await _extract_zipfile(context, orig_path, tmp_dir=tmp_dir)
     else:

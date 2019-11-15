@@ -22,6 +22,7 @@ from scriptworker.utils import makedirs
 from signingscript.exceptions import SigningScriptError
 from signingscript.utils import get_hash
 import signingscript.sign as sign
+import signingscript.task as stask
 import signingscript.utils as utils
 from conftest import (
     noop_sync,
@@ -1432,3 +1433,58 @@ async def test_authenticode_sign_single_file(tmpdir, mocker, context):
     )
     assert result == test_file
     assert os.path.exists(result)
+
+
+@pytest.mark.asyncio
+async def test_norepacking_archives(tmpdir, mocker, context):
+    context.config["authenticode_cert"] = os.path.join(TEST_DATA_DIR, "windows.crt")
+    context.config["authenticode_cross_cert"] = os.path.join(
+        TEST_DATA_DIR, "windows.crt"
+    )
+    context.config["authenticode_url"] = "https://example.com"
+    context.config["authenticode_timestamp_style"] = None
+
+    test_file = os.path.join(tmpdir, "windows.zip")
+    shutil.copyfile(os.path.join(TEST_DATA_DIR, "windows.zip"), test_file)
+
+    async def mocked_autograph_hash(context, from_, fmt):
+        return b""
+
+    async def mocked_autograph_file(context, from_, fmt, to=None, extension_id=None):
+        if not to:
+            return from_
+        shutil.copyfile(from_, to)
+        return to
+
+    async def mocked_winsign(infile, outfile, digest_algo, certs, signer, **kwargs):
+        await signer("", "")
+        shutil.copyfile(infile, outfile)
+        return True
+
+    async def mocked_widevine(context, from_, blessed, to=None):
+        with open(to, "wb") as fout:
+            fout.write(b"wvsig")
+        return to
+
+    def mocked_issigned(filename):
+        if filename.endswith("signed.exe"):
+            return True
+
+    async def mocked_merge(orig, signed, to):
+        shutil.copyfile(signed, to)
+
+    mocker.patch.object(winsign.sign, "sign_file", mocked_winsign)
+    mocker.patch.object(winsign.osslsigncode, "is_signed", mocked_issigned)
+    mocker.patch.object(sign, "sign_hash_with_autograph", mocked_autograph_hash)
+    mocker.patch.object(sign, "sign_file_with_autograph", mocked_autograph_file)
+    mocker.patch.object(sign, "sign_widevine_with_autograph", mocked_widevine)
+    mocker.patch.object(sign, "merge_omnija_files", mocked_merge)
+
+    _extract_zipfile = mocker.patch("signingscript.sign._extract_zipfile", side_effect=sign._extract_zipfile)
+    _create_zipfile = mocker.patch("signingscript.sign._create_zipfile", side_effect=sign._create_zipfile)
+
+    result = await stask.sign(context, test_file, ["autograph_authenticode", "autograph_widevine", "autograph_omnija"])
+    assert result == [test_file]
+    assert os.path.exists(test_file)
+    assert _create_zipfile.call_count == 1
+    assert _extract_zipfile.call_count == 1

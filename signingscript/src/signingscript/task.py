@@ -15,6 +15,7 @@ import re
 from scriptworker.exceptions import TaskVerificationError
 from scriptworker.utils import get_single_item_from_sequence
 
+import signingscript.sign as ssign
 from signingscript.sign import (
     sign_gpg,
     sign_jar,
@@ -26,6 +27,7 @@ from signingscript.sign import (
     sign_omnija,
     sign_langpack,
     sign_authenticode_zip,
+    extract_archive,
 )
 
 log = logging.getLogger(__name__)
@@ -147,16 +149,35 @@ async def sign(context, path, signing_formats):
             there are detached sigfiles.
 
     """
+    archive_formats = {
+        'autograph_widevine',
+        'autograph_omnija',
+        'autograph_authenticode',
+    }
+
     output = path
+    output_archive = False
     # Loop through the formats and sign one by one.
     for fmt in signing_formats:
         signing_func = _get_signing_function_from_format(fmt)
-        try:
-            size = os.path.getsize(output)
-        except OSError:
-            size = "??"
-        log.info("sign(): Signing %s bytes in %s with %s...", size, output, fmt)
+        output_is_dir = os.path.isdir(output)
+        if fmt in archive_formats:
+            if not os.path.isdir(output):
+                output = await extract_archive(context, output)
+            output_archive = True
         output = await signing_func(context, output, fmt)
+
+    # Re-create an archive if necessary
+    if output_archive:
+        ext = os.path.splitext(path)[1]
+        files = ssign._get_files(output)
+        if ext == ".zip":
+            output = await ssign._create_zipfile(context, path, files, output)
+        elif ext in (".tar.bz2", ".tar.gz"):
+            output = await ssign._create_tarfile(context, path, files, ext, output)
+        else:
+            raise ValueError("Need to add support for re-creating archives")
+
     # We want to return a list
     if not isinstance(output, (tuple, list)):
         output = [output]
