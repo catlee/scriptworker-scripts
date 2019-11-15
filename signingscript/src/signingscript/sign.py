@@ -299,42 +299,6 @@ async def sign_langpack(context, orig_path, fmt):
 # sign_widevine {{{1
 @time_async_function
 async def sign_widevine(context, orig_path, fmt):
-    """Call the appropriate helper function to do widevine signing.
-
-    Args:
-        context (Context): the signing context
-        orig_path (str): the source file to sign
-        fmt (str): the format to sign with
-
-    Raises:
-        SigningScriptError: on unknown suffix.
-
-    Returns:
-        str: the path to the signed archive
-
-    """
-    if os.path.isdir(orig_path):
-        return await sign_widevine_dir(context, orig_path, fmt)
-
-    file_base, file_extension = os.path.splitext(orig_path)
-    # Convert dmg to tarball
-    if file_extension == ".dmg":
-        await _convert_dmg_to_tar_gz(context, orig_path)
-        orig_path = "{}.tar.gz".format(file_base)
-    ext_to_fn = {
-        ".zip": sign_widevine_zip,
-        ".tar.bz2": sign_widevine_tar,
-        ".tar.gz": sign_widevine_tar,
-    }
-    for ext, signing_func in ext_to_fn.items():
-        if orig_path.endswith(ext):
-            return await signing_func(context, orig_path, fmt)
-    raise SigningScriptError("Unknown widevine file format for {}".format(orig_path))
-
-
-# sign_widevine_dir {{{1
-@time_async_function
-async def sign_widevine_dir(context, orig_path, fmt):
     """Sign the a directory with widevine.
 
     Extract the files to sign (see `_WIDEVINE_BLESSED_FILENAMES` and
@@ -351,6 +315,8 @@ async def sign_widevine_dir(context, orig_path, fmt):
         str: the path to the signed archive
 
     """
+    if not os.path.isdir(orig_path):
+        raise SigningScriptError("Don't know how to sign {} with widevine".format(orig_path))
     # Get file list
     all_files = _get_files(orig_path)
     files_to_sign = _get_widevine_signing_files(all_files)
@@ -375,126 +341,6 @@ async def sign_widevine_dir(context, orig_path, fmt):
     # Regenerate the `precomplete` file, which is used for cleanup before
     # applying a complete mar.
     _run_generate_precomplete(context, orig_path)
-    return orig_path
-
-
-# sign_widevine_zip {{{1
-@time_async_function
-async def sign_widevine_zip(context, orig_path, fmt):
-    """Sign the internals of a zipfile with the widevine key.
-
-    Extract the files to sign (see `_WIDEVINE_BLESSED_FILENAMES` and
-    `_WIDEVINE_UNBLESSED_FILENAMES), skipping already-signed files.
-    The blessed files should be signed with the `widevine_blessed` format.
-    Then append the sigfiles to the zipfile.
-
-    Args:
-        context (Context): the signing context
-        orig_path (str): the source file to sign
-        fmt (str): the format to sign with
-
-    Returns:
-        str: the path to the signed archive
-
-    """
-    # This will get cleaned up when we nuke `work_dir`. Clean up at that point
-    # rather than immediately after `sign_widevine`, to optimize task runtime
-    # speed over disk space.
-    tmp_dir = tempfile.mkdtemp(prefix="wvzip", dir=context.config["work_dir"])
-    # Get file list
-    all_files = await _get_zipfile_files(orig_path)
-    files_to_sign = _get_widevine_signing_files(all_files)
-    log.debug("Widevine files to sign: %s", files_to_sign)
-    if files_to_sign:
-        # Extract all files so we can create `precomplete` with the full
-        # file list
-        all_files = await _extract_zipfile(context, orig_path, tmp_dir=tmp_dir)
-        tasks = []
-        # Sign the appropriate inner files
-        for from_, fmt in files_to_sign.items():
-            from_ = os.path.join(tmp_dir, from_)
-            to = f"{from_}.sig"
-            tasks.append(
-                asyncio.ensure_future(
-                    sign_widevine_with_autograph(
-                        context, from_, "blessed" in fmt, to=to
-                    )
-                )
-            )
-            all_files.append(to)
-        await raise_future_exceptions(tasks)
-        remove_extra_files(tmp_dir, all_files)
-        # Regenerate the `precomplete` file, which is used for cleanup before
-        # applying a complete mar.
-        _run_generate_precomplete(context, tmp_dir)
-        await _create_zipfile(context, orig_path, all_files, mode="w", tmp_dir=tmp_dir)
-    return orig_path
-
-
-# sign_widevine_tar {{{1
-@time_async_function
-async def sign_widevine_tar(context, orig_path, fmt):
-    """Sign the internals of a tarfile with the widevine key.
-
-    Extract the entire tarball, but only sign a handful of files (see
-    `_WIDEVINE_BLESSED_FILENAMES` and `_WIDEVINE_UNBLESSED_FILENAMES).
-    The blessed files should be signed with the `widevine_blessed` format.
-    Then recreate the tarball.
-
-    Ideally we would be able to append the sigfiles to the original tarball,
-    but that's not possible with compressed tarballs.
-
-    Args:
-        context (Context): the signing context
-        orig_path (str): the source file to sign
-        fmt (str): the format to sign with
-
-    Returns:
-        str: the path to the signed archive
-
-    """
-    _, compression = os.path.splitext(orig_path)
-    # This will get cleaned up when we nuke `work_dir`. Clean up at that point
-    # rather than immediately after `sign_widevine`, to optimize task runtime
-    # speed over disk space.
-    tmp_dir = tempfile.mkdtemp(prefix="wvtar", dir=context.config["work_dir"])
-    # Get file list
-    all_files = await _get_tarfile_files(orig_path, compression)
-    files_to_sign = _get_widevine_signing_files(all_files)
-    log.debug("Widevine files to sign: %s", files_to_sign)
-    if files_to_sign:
-        # Extract all files so we can create `precomplete` with the full
-        # file list
-        all_files = await _extract_tarfile(
-            context, orig_path, compression, tmp_dir=tmp_dir
-        )
-        tasks = []
-        # Sign the appropriate inner files
-        for from_, fmt in files_to_sign.items():
-            from_ = os.path.join(tmp_dir, from_)
-            # Don't try to sign directories
-            if not os.path.isfile(from_):
-                continue
-            # Move the sig location on mac. This should be noop on linux.
-            to = _get_mac_sigpath(from_)
-            log.debug("Adding %s to the sigfile paths...", to)
-            makedirs(os.path.dirname(to))
-            tasks.append(
-                asyncio.ensure_future(
-                    sign_widevine_with_autograph(
-                        context, from_, "blessed" in fmt, to=to
-                    )
-                )
-            )
-            all_files.append(to)
-        await raise_future_exceptions(tasks)
-        remove_extra_files(tmp_dir, all_files)
-        # Regenerate the `precomplete` file, which is used for cleanup before
-        # applying a complete mar.
-        _run_generate_precomplete(context, tmp_dir)
-        await _create_tarfile(
-            context, orig_path, all_files, compression, tmp_dir=tmp_dir
-        )
     return orig_path
 
 
