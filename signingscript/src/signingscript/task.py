@@ -150,6 +150,11 @@ async def make_archive(context, dirname, archive_ext, output):
     return output
 
 
+def is_archive(pathname):
+    """Determine if a file is a supported archive."""
+    return pathname.endswith((".zip", ".tar.gz", ".tar.bz2"))
+
+
 # sign {{{1
 async def sign(context, path, signing_formats):
     """Call the appropriate signing function per format, for a single file.
@@ -183,10 +188,11 @@ async def sign(context, path, signing_formats):
     # Loop through the formats and sign one by one.
     for fmt in signing_formats:
         signing_func = _get_signing_function_from_format(fmt)
+        # TODO: Check if output is actually an archive
         if fmt in archive_formats:
-            if not os.path.isdir(output):
+            if not os.path.isdir(output) and is_archive(output):
                 output = await extract_archive(context, output)
-            recreate_archive = True
+                recreate_archive = True
         else:
             if os.path.isdir(output):
                 output = await make_archive(context, output, archive_ext, path)
