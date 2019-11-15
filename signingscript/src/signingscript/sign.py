@@ -345,43 +345,7 @@ async def sign_widevine(context, orig_path, fmt):
 
 
 # sign_omnija {{{1
-@time_async_function
 async def sign_omnija(context, orig_path, fmt):
-    """Call the appropriate helper function to do omnija signing.
-
-    Args:
-        context (Context): the signing context
-        orig_path (str): the source file to sign
-        fmt (str): the format to sign with
-
-    Raises:
-        SigningScriptError: on unknown suffix.
-
-    Returns:
-        str: the path to the signed archive
-
-    """
-    if os.path.isdir(orig_path):
-        return await sign_omnija_dir(context, orig_path, fmt)
-
-    file_base, file_extension = os.path.splitext(orig_path)
-    # Convert dmg to tarball
-    if file_extension == ".dmg":
-        await _convert_dmg_to_tar_gz(context, orig_path)
-        orig_path = "{}.tar.gz".format(file_base)
-    ext_to_fn = {
-        ".zip": sign_omnija_zip,
-        ".tar.bz2": sign_omnija_tar,
-        ".tar.gz": sign_omnija_tar,
-    }
-    for ext, signing_func in ext_to_fn.items():
-        if orig_path.endswith(ext):
-            return await signing_func(context, orig_path, fmt)
-    raise SigningScriptError("Unknown omnija file format for {}".format(orig_path))
-
-
-# sign_omnija_dir {{{1
-async def sign_omnija_dir(context, orig_path, fmt):
     """Sign the a directory with the omnija key for all omni.ja files.
 
     Sign files with autograph, recreating the omni.ja
@@ -409,95 +373,6 @@ async def sign_omnija_dir(context, orig_path, fmt):
                 asyncio.ensure_future(sign_omnija_with_autograph(context, from_))
             )
         await raise_future_exceptions(tasks)
-    return orig_path
-
-
-# sign_omnija_zip {{{1
-async def sign_omnija_zip(context, orig_path, fmt):
-    """Sign the internals of a zipfile with the omnija key for all omni.ja files.
-
-    Extract the files to sign, then sign them with autograph, recreating the omni.ja
-    from the original to preserve performance tweeks but adding signing info,
-    Then append the sigfiles to the zipfile.
-
-    Args:
-        context (Context): the signing context
-        orig_path (str): the source file to sign
-        fmt (str): the format to sign with
-
-    Returns:
-        str: the path to the signed archive
-
-    """
-    # This will get cleaned up when we nuke `work_dir`. Clean up at that point
-    # rather than immediately after `sign_omnija`, to optimize task runtime
-    # speed over disk space.
-    tmp_dir = tempfile.mkdtemp(prefix="ojzip", dir=context.config["work_dir"])
-    # Get file list
-    all_files = await _get_zipfile_files(orig_path)
-    files_to_sign = _get_omnija_signing_files(all_files)
-    log.debug("Omnija files to sign: %s", files_to_sign)
-    if files_to_sign:
-        all_files = await _extract_zipfile(context, orig_path, tmp_dir=tmp_dir)
-        tasks = []
-        # Sign the appropriate inner files
-        for from_, fmt in files_to_sign.items():
-            from_ = os.path.join(tmp_dir, from_)
-            tasks.append(
-                asyncio.ensure_future(sign_omnija_with_autograph(context, from_))
-            )
-        await raise_future_exceptions(tasks)
-        await _create_zipfile(context, orig_path, all_files, mode="w", tmp_dir=tmp_dir)
-    return orig_path
-
-
-# sign_omnija_tar {{{1
-@time_async_function
-async def sign_omnija_tar(context, orig_path, fmt):
-    """Sign the internals of a tarfile with the omnija key for all omni.ja files.
-
-    Extract the files to sign, then sign them with autograph, recreating the omni.ja
-    from the original to preserve performance tweeks but adding signing info.
-    Then recreate the tarball.
-
-    Args:
-        context (Context): the signing context
-        orig_path (str): the source file to sign
-        fmt (str): the format to sign with
-
-    Returns:
-        str: the path to the signed archive
-
-    """
-    _, compression = os.path.splitext(orig_path)
-    # This will get cleaned up when we nuke `work_dir`. Clean up at that point
-    # rather than immediately after `sign_widevine`, to optimize task runtime
-    # speed over disk space.
-    tmp_dir = tempfile.mkdtemp(prefix="ojtar", dir=context.config["work_dir"])
-    # Get file list
-    all_files = await _get_tarfile_files(orig_path, compression)
-    files_to_sign = _get_omnija_signing_files(all_files)
-    log.debug("Omnija files to sign: %s", files_to_sign)
-    if files_to_sign:
-        # Extract all files so we can create `precomplete` with the full
-        # file list
-        all_files = await _extract_tarfile(
-            context, orig_path, compression, tmp_dir=tmp_dir
-        )
-        tasks = []
-        # Sign the appropriate inner files
-        for from_, fmt in files_to_sign.items():
-            from_ = os.path.join(tmp_dir, from_)
-            # Don't try to sign directories
-            if not os.path.isfile(from_):
-                continue
-            tasks.append(
-                asyncio.ensure_future(sign_omnija_with_autograph(context, from_))
-            )
-        await raise_future_exceptions(tasks)
-        await _create_tarfile(
-            context, orig_path, all_files, compression, tmp_dir=tmp_dir
-        )
     return orig_path
 
 

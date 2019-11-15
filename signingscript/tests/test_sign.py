@@ -940,67 +940,6 @@ async def test_gpg_autograph(context, mocker, tmp_path):
         result = await sign.sign_gpg_with_autograph(context, tmp, "gpg")
 
 
-# sign_omnija {{{1  -- 537
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "filename,raises,nofiles",
-    (
-        ("foo.unknown", True, False),
-        ("foo.zip", False, False),
-        ("foo.dmg", False, False),
-        ("foo.tar.bz2", False, False),
-        ("foo.zip", False, True),
-        ("foo.dmg", False, True),
-        ("foo.tar.bz2", False, True),
-    ),
-)
-async def test_sign_omnija(context, mocker, filename, raises, nofiles):
-    fmt = "autograph_omnija"
-    files = [
-        "isdir/omni.ja",
-        "firefox/omni.ja",
-        "firefox/browser/omni.ja",
-        "z/blah",
-        "ignore",
-    ]
-    if nofiles:
-        # Don't have any omni.ja
-        files = ["z/blah", "ignore"]
-
-    async def fake_filelist(*args, **kwargs):
-        return files
-
-    async def fake_unzip(_, f, **kwargs):
-        assert f.endswith(".zip")
-        return files
-
-    async def fake_untar(_, f, comp, **kwargs):
-        assert f.endswith(".tar.{}".format(comp.lstrip(".")))
-        return files
-
-    async def fake_undmg(_, f):
-        assert f.endswith(".dmg")
-
-    def fake_isfile(path):
-        return "isdir" not in path
-
-    mocker.patch.object(sign, "_get_tarfile_files", new=fake_filelist)
-    mocker.patch.object(sign, "_extract_tarfile", new=fake_untar)
-    mocker.patch.object(sign, "_get_zipfile_files", new=fake_filelist)
-    mocker.patch.object(sign, "_extract_zipfile", new=fake_unzip)
-    mocker.patch.object(sign, "_convert_dmg_to_tar_gz", new=fake_undmg)
-    mocker.patch.object(sign, "sign_omnija_with_autograph", new=noop_async)
-    mocker.patch.object(sign, "_create_tarfile", new=noop_async)
-    mocker.patch.object(sign, "_create_zipfile", new=noop_async)
-    mocker.patch.object(os.path, "isfile", new=fake_isfile)
-
-    if raises:
-        with pytest.raises(SigningScriptError):
-            await sign.sign_omnija(context, filename, fmt)
-    else:
-        await sign.sign_omnija(context, filename, fmt)
-
-
 # _get_omnija_signing_files {{{1  -- 621
 @pytest.mark.parametrize(
     "filenames,expected",
